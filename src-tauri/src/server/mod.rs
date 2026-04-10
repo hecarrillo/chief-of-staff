@@ -9,6 +9,7 @@ use routes::ServerState;
 use std::sync::Arc;
 use tauri::AppHandle;
 use tokio::net::TcpListener;
+use tower_http::cors::{CorsLayer, Any};
 
 pub async fn start_server(app: AppHandle, state: Arc<AppState>, todos: Arc<TodoStore>) {
     let port = state.config.read().await.http_port;
@@ -34,9 +35,14 @@ pub async fn start_server(app: AppHandle, state: Arc<AppState>, todos: Arc<TodoS
         .route("/answer", post(routes::post_answer))
         .route("/answer_number", post(routes::answer_by_number))
         .route("/debug/tmux", get(routes::debug_tmux))
-        .with_state(server_state);
+        .route("/api/messages", get(routes::api_get_messages))
+        .route("/api/mode", get(routes::api_get_mode))
+        .with_state(server_state)
+        .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any));
 
-    let addr = format!("127.0.0.1:{}", port);
+    // On Windows, bind to 0.0.0.0 so WSL can reach the bridge
+    let bind_addr = if cfg!(windows) { "0.0.0.0" } else { "127.0.0.1" };
+    let addr = format!("{}:{}", bind_addr, port);
     let listener = TcpListener::bind(&addr)
         .await
         .unwrap_or_else(|_| panic!("Failed to bind to {}", addr));

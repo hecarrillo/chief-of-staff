@@ -10,7 +10,8 @@ export default function StatusBar() {
     const unlisten = await listen<string>("mode-changed", (event) => {
       setModeSignal(event.payload as "at_desk" | "away");
     });
-    onCleanup(() => unlisten());
+
+    onCleanup(() => { unlisten(); });
   });
 
   async function toggleMode() {

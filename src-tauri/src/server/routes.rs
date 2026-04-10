@@ -220,3 +220,23 @@ pub async fn answer_by_number(
 
     (StatusCode::NOT_FOUND, Json(ApiResponse { ok: false, message: "No pending question".into() }))
 }
+
+/// GET /api/messages — returns all messages (for frontend polling)
+pub async fn api_get_messages(
+    State(server): State<Arc<ServerState>>,
+) -> (StatusCode, Json<Vec<Message>>) {
+    let msgs = server.app_state.messages.read().await.clone();
+    (StatusCode::OK, Json(msgs))
+}
+
+/// GET /api/mode — returns current mode (for frontend polling)
+pub async fn api_get_mode(
+    State(server): State<Arc<ServerState>>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let mode = server.app_state.mode.read().await;
+    let mode_str = match *mode {
+        Mode::AtDesk => "at_desk",
+        Mode::Away => "away",
+    };
+    (StatusCode::OK, Json(serde_json::json!({"mode": mode_str})))
+}

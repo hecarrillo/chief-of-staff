@@ -1,4 +1,4 @@
-import { createSignal, For, onMount, onCleanup, Show } from "solid-js";
+import { createSignal, createEffect, For, onMount, onCleanup, Show } from "solid-js";
 import { messages, addMessage, setMessages } from "../lib/stores";
 import { sendMessage, getMessages, getSessions, getWindows, setTargetWindow, getTargetWindow, getSessionStatus } from "../lib/tauri-bridge";
 import type { SessionInfo, WindowInfo } from "../lib/types";
@@ -84,6 +84,12 @@ export default function Messages() {
     // After timeout, let user interact anyway
     setSessionReady(true);
   }
+
+  // Auto-scroll when messages change (from global poller)
+  createEffect(() => {
+    const _len = messages().length;
+    scrollToBottom();
+  });
 
   onMount(async () => {
     try {

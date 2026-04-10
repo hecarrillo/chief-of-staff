@@ -8,6 +8,7 @@ import Dashboard from "./pages/Dashboard";
 import Sessions from "./pages/Sessions";
 import Settings from "./pages/Settings";
 import Setup from "./pages/Setup";
+import { startPolling } from "./lib/poller";
 
 function Layout(props: { children?: any }) {
   const location = useLocation();
@@ -49,6 +50,7 @@ export default function App() {
         when={setupDone()}
         fallback={<Setup onComplete={() => setSetupDone(true)} />}
       >
+        {startPolling()}
         <Router root={Layout}>
           <Route path="/" component={Messages} />
           <Route path="/dashboard" component={Dashboard} />

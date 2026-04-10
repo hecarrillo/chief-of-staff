@@ -44,11 +44,20 @@ pub async fn start_response_watcher(app: AppHandle, state: Arc<AppState>) {
             }
         }
 
-        // Extract Claude response lines (prefixed with ⏺)
+        // Extract Claude response lines (prefixed with ● U+25CF or ⏺ U+23FA)
         let response_text: Vec<String> = new_lines[new_start..]
             .iter()
-            .filter(|line| line.trim().starts_with('\u{23FA}'))
-            .map(|line| line.trim().trim_start_matches('\u{23FA}').trim().to_string())
+            .filter(|line| {
+                let t = line.trim();
+                t.starts_with('\u{25CF}') || t.starts_with('\u{23FA}')
+            })
+            .map(|line| {
+                line.trim()
+                    .trim_start_matches('\u{25CF}')
+                    .trim_start_matches('\u{23FA}')
+                    .trim()
+                    .to_string()
+            })
             .collect();
 
         // Update snapshot AFTER we've extracted what we need

@@ -1,6 +1,27 @@
 use std::process::Command;
 use std::sync::OnceLock;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Escape a string for use in a bash -c command
+#[cfg(windows)]
+fn shell_escape(s: &str) -> String {
+    // Wrap in single quotes, escaping any embedded single quotes
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Build a WSL command with hidden console window (Windows only)
+#[cfg(windows)]
+fn wsl_command() -> Command {
+    let mut cmd = Command::new("wsl");
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
 /// Public accessor for the resolved tmux binary path
 pub fn tmux_bin_pub() -> &'static str {
     tmux_bin()
@@ -10,6 +31,16 @@ pub fn tmux_bin_pub() -> &'static str {
 fn tmux_bin() -> &'static str {
     static BIN: OnceLock<String> = OnceLock::new();
     BIN.get_or_init(|| {
+        if cfg!(windows) {
+            // On Windows, tmux lives inside WSL — check via `wsl -- bash -c 'which tmux'`
+            if let Ok(output) = wsl_command().args(["--", "bash", "-c", "which tmux"]).output() {
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path.is_empty() {
+                    return path;
+                }
+            }
+            return "tmux".to_string();
+        }
         // Try common locations first (macOS GUI apps don't have full PATH)
         let candidates = [
             "/opt/homebrew/bin/tmux",  // Apple Silicon homebrew
@@ -34,10 +65,22 @@ fn tmux_bin() -> &'static str {
 
 /// Run a tmux command and return stdout
 fn tmux(args: &[&str]) -> Result<String, String> {
-    let output = Command::new(tmux_bin())
-        .args(args)
-        .output()
-        .map_err(|e| format!("tmux exec: {}", e))?;
+    let output = if cfg!(windows) {
+        // On Windows, run tmux through WSL via bash -c to prevent
+        // argument mangling (WSL eats #{} format strings otherwise)
+        let mut parts = vec![tmux_bin().to_string()];
+        parts.extend(args.iter().map(|a| shell_escape(a)));
+        let bash_cmd = parts.join(" ");
+        wsl_command()
+            .args(["--", "bash", "-c", &bash_cmd])
+            .output()
+            .map_err(|e| format!("wsl tmux exec: {}", e))?
+    } else {
+        Command::new(tmux_bin())
+            .args(args)
+            .output()
+            .map_err(|e| format!("tmux exec: {}", e))?
+    };
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())

@@ -7,6 +7,12 @@ use std::process::Command;
 use std::sync::Arc;
 use tauri::State;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 type SharedState = Arc<AppState>;
 type SharedTodos = Arc<TodoStore>;
 
@@ -175,10 +181,11 @@ pub fn check_system() -> SystemCheck {
     let tmux_path = crate::tmux::tmux_bin_pub().to_string();
     let tmux_found = std::path::Path::new(&tmux_path).exists()
         || crate::tmux::is_running()
-        || which_exists("tmux");
+        || which_exists("tmux")
+        || wsl_which_exists("tmux");
 
     // Check claude CLI
-    let claude_found = which_exists("claude");
+    let claude_found = which_exists("claude") || wsl_which_exists("claude");
 
     // Check if config exists (first run?)
     let config_exists = state::data_dir().join("config.json").exists();
@@ -204,9 +211,25 @@ fn which_exists(cmd: &str) -> bool {
     } else {
         &["-c", &format!("which {}", cmd)]
     };
-    Command::new(shell)
-        .args(args)
-        .output()
+    let mut c = Command::new(shell);
+    c.args(args);
+    #[cfg(windows)]
+    c.creation_flags(CREATE_NO_WINDOW);
+    c.output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Check if a command exists inside WSL (Windows only)
+fn wsl_which_exists(cmd: &str) -> bool {
+    if !cfg!(windows) {
+        return false;
+    }
+    let mut c = Command::new("wsl");
+    c.args(["--", "bash", "-c", &format!("which {}", cmd)]);
+    #[cfg(windows)]
+    c.creation_flags(CREATE_NO_WINDOW);
+    c.output()
         .map(|o| o.status.success())
         .unwrap_or(false)
 }

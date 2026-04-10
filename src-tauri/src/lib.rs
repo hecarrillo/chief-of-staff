@@ -11,6 +11,35 @@ use state::{AppState, BridgeConfig};
 use std::sync::Arc;
 use todos::TodoStore;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+/// Resolve the Windows host IP as seen from inside WSL (the default gateway)
+#[cfg(windows)]
+fn resolve_wsl_host_ip() -> Option<String> {
+    // The default gateway in WSL2 is the Windows host
+    let output = std::process::Command::new("wsl")
+        .args(["bash", "-c", "ip route show default | awk '{print $3}' | head -1"])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .output()
+        .ok()?;
+    let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if ip.is_empty() { None } else { Some(ip) }
+}
+
+/// Convert a Windows path (C:\Users\...) to WSL path (/mnt/c/Users/...)
+#[cfg(windows)]
+fn win_to_wsl_path(path: &str) -> String {
+    let p = path.replace('\\', "/");
+    // Match drive letter pattern like C:/ or c:/
+    if p.len() >= 3 && p.as_bytes()[1] == b':' && p.as_bytes()[2] == b'/' {
+        let drive = (p.as_bytes()[0] as char).to_ascii_lowercase();
+        format!("/mnt/{}/{}", drive, &p[3..])
+    } else {
+        p
+    }
+}
+
 fn load_config() -> BridgeConfig {
     let config_path = state::data_dir().join("config.json");
     if let Ok(data) = std::fs::read_to_string(&config_path) {
@@ -40,6 +69,13 @@ fn ensure_cos_session(config: &state::BridgeConfig) {
         config.cos_cwd.clone()
     };
 
+    // On Windows, convert the cwd to a WSL-accessible path
+    let cwd = if cfg!(windows) {
+        win_to_wsl_path(&cwd)
+    } else {
+        cwd
+    };
+
     if let Err(e) = tmux::create_session(session_name, &cwd) {
         eprintln!("Failed to create tmux session '{}': {}", session_name, e);
         return;
@@ -47,15 +83,43 @@ fn ensure_cos_session(config: &state::BridgeConfig) {
 
     // Write framework to file so Claude reads it on startup
     let framework_path = state::data_dir().join("cos-framework.md");
-    if let Err(e) = std::fs::write(&framework_path, &config.cos_framework) {
+    let mut framework_content = config.cos_framework.clone();
+
+    // On Windows/WSL, Claude runs inside WSL and can't reach Windows localhost.
+    // Replace localhost with the host gateway IP so curl commands work.
+    #[cfg(windows)]
+    {
+        let port = config.http_port;
+        let host_ip = resolve_wsl_host_ip().unwrap_or_else(|| "host.internal".to_string());
+        let from = format!("localhost:{}", port);
+        let to = format!("{}:{}", host_ip, port);
+        framework_content = framework_content.replace(&from, &to);
+    }
+
+    if let Err(e) = std::fs::write(&framework_path, &framework_content) {
         eprintln!("Failed to write framework: {}", e);
     }
+
+    // On Windows, convert the framework path to a WSL-accessible path
+    let framework_arg = if cfg!(windows) {
+        let win_path = framework_path.to_string_lossy().replace('\\', "/");
+        // Convert C:/Users/... to /mnt/c/Users/...
+        if let Some(rest) = win_path.strip_prefix("C:/") {
+            format!("/mnt/c/{}", rest)
+        } else if let Some(rest) = win_path.strip_prefix("c:/") {
+            format!("/mnt/c/{}", rest)
+        } else {
+            win_path.to_string()
+        }
+    } else {
+        framework_path.to_string_lossy().into_owned()
+    };
 
     // Launch Claude Code with the framework appended to system prompt
     // --append-system-prompt-file keeps CLAUDE.md discovery + adds our framework
     let cmd = format!(
         "claude --dangerously-skip-permissions --append-system-prompt-file {}",
-        framework_path.to_string_lossy()
+        framework_arg
     );
     let _ = tmux::send_keys(session_name, &cmd);
 
@@ -68,11 +132,7 @@ fn ensure_cos_session(config: &state::BridgeConfig) {
                 std::thread::sleep(std::time::Duration::from_secs(2));
                 if let Ok(content) = tmux::capture_pane(&name, 15) {
                     if content.contains("Yes, I trust this folder") {
-                        let _ = tmux::send_keys_raw(&name, "");
-                        // send Enter key literally
-                        let _ = std::process::Command::new(tmux::tmux_bin_pub())
-                            .args(["send-keys", "-t", &name, "Enter"])
-                            .output();
+                        let _ = tmux::send_keys(&name, "");
                         break;
                     }
                     // Already past trust dialog
