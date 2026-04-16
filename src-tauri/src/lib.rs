@@ -70,11 +70,8 @@ fn ensure_cos_session(config: &state::BridgeConfig) {
     };
 
     // On Windows, convert the cwd to a WSL-accessible path
-    let cwd = if cfg!(windows) {
-        win_to_wsl_path(&cwd)
-    } else {
-        cwd
-    };
+    #[cfg(windows)]
+    let cwd = win_to_wsl_path(&cwd);
 
     if let Err(e) = tmux::create_session(session_name, &cwd) {
         eprintln!("Failed to create tmux session '{}': {}", session_name, e);
@@ -83,7 +80,7 @@ fn ensure_cos_session(config: &state::BridgeConfig) {
 
     // Write framework to file so Claude reads it on startup
     let framework_path = state::data_dir().join("cos-framework.md");
-    let mut framework_content = config.cos_framework.clone();
+    let framework_content = config.cos_framework.clone();
 
     // On Windows/WSL, Claude runs inside WSL and can't reach Windows localhost.
     // Replace localhost with the host gateway IP so curl commands work.

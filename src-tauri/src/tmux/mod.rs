@@ -31,7 +31,8 @@ pub fn tmux_bin_pub() -> &'static str {
 fn tmux_bin() -> &'static str {
     static BIN: OnceLock<String> = OnceLock::new();
     BIN.get_or_init(|| {
-        if cfg!(windows) {
+        #[cfg(windows)]
+        {
             // On Windows, tmux lives inside WSL — check via `wsl -- bash -c 'which tmux'`
             if let Ok(output) = wsl_command().args(["--", "bash", "-c", "which tmux"]).output() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -41,31 +42,35 @@ fn tmux_bin() -> &'static str {
             }
             return "tmux".to_string();
         }
-        // Try common locations first (macOS GUI apps don't have full PATH)
-        let candidates = [
-            "/opt/homebrew/bin/tmux",  // Apple Silicon homebrew
-            "/usr/local/bin/tmux",     // Intel homebrew
-            "/usr/bin/tmux",           // System
-        ];
-        for path in &candidates {
-            if std::path::Path::new(path).exists() {
-                return path.to_string();
+        #[cfg(not(windows))]
+        {
+            // Try common locations first (macOS GUI apps don't have full PATH)
+            let candidates = [
+                "/opt/homebrew/bin/tmux",  // Apple Silicon homebrew
+                "/usr/local/bin/tmux",     // Intel homebrew
+                "/usr/bin/tmux",           // System
+            ];
+            for path in &candidates {
+                if std::path::Path::new(path).exists() {
+                    return path.to_string();
+                }
             }
-        }
-        // Fallback: try shell resolution
-        if let Ok(output) = Command::new("/bin/sh").args(["-c", "which tmux"]).output() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return path;
+            // Fallback: try shell resolution
+            if let Ok(output) = Command::new("/bin/sh").args(["-c", "which tmux"]).output() {
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path.is_empty() {
+                    return path;
+                }
             }
+            "tmux".to_string()
         }
-        "tmux".to_string()
     })
 }
 
 /// Run a tmux command and return stdout
 fn tmux(args: &[&str]) -> Result<String, String> {
-    let output = if cfg!(windows) {
+    #[cfg(windows)]
+    let output = {
         // On Windows, run tmux through WSL via bash -c to prevent
         // argument mangling (WSL eats #{} format strings otherwise)
         let mut parts = vec![tmux_bin().to_string()];
@@ -75,7 +80,9 @@ fn tmux(args: &[&str]) -> Result<String, String> {
             .args(["--", "bash", "-c", &bash_cmd])
             .output()
             .map_err(|e| format!("wsl tmux exec: {}", e))?
-    } else {
+    };
+    #[cfg(not(windows))]
+    let output = {
         Command::new(tmux_bin())
             .args(args)
             .output()
