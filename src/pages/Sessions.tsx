@@ -177,6 +177,13 @@ export default function Sessions() {
           {/* Header */}
           <div class="flex items-center gap-2 px-4 py-2 border-b border-neutral-800 bg-neutral-950/50">
             <span class="text-xs text-terminal-green font-medium">{activeTarget()}</span>
+            <code
+              class="text-[10px] text-neutral-500 bg-neutral-900 px-2 py-0.5 rounded font-mono cursor-pointer hover:text-neutral-300 transition-colors"
+              title="Click to copy"
+              onClick={() => navigator.clipboard.writeText(`tmux attach -t ${activeTarget()}`)}
+            >
+              tmux attach -t {activeTarget()}
+            </code>
             <div class="ml-auto flex items-center gap-2">
               <label class="flex items-center gap-1.5 text-[10px] text-neutral-500 cursor-pointer">
                 <input
