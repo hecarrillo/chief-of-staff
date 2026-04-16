@@ -71,6 +71,7 @@ export interface BridgeConfig {
   vault_path: string;
   cos_session: string;
   cos_cwd: string;
+  cos_framework_path: string;
   cos_framework: string;
 }
 

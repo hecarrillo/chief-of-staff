@@ -48,7 +48,11 @@ pub struct BridgeConfig {
     /// Working directory for the CoS session
     #[serde(default = "default_cwd")]
     pub cos_cwd: String,
-    /// System framework prompt sent to Claude on session start
+    /// Path to an external framework file (e.g. Obsidian vault).
+    /// If set and readable, this takes priority over cos_framework.
+    #[serde(default)]
+    pub cos_framework_path: String,
+    /// Inline system framework prompt — used as fallback when cos_framework_path is empty or unreadable
     #[serde(default = "default_framework")]
     pub cos_framework: String,
 }
@@ -62,12 +66,29 @@ impl Default for BridgeConfig {
             vault_path: String::new(),
             cos_session: "cos".into(),
             cos_cwd: default_cwd(),
+            cos_framework_path: String::new(),
             cos_framework: default_framework(),
         }
     }
 }
 
 impl BridgeConfig {
+    /// Resolve the effective framework: read from file path if set, else use inline
+    pub fn effective_framework(&self) -> String {
+        if !self.cos_framework_path.is_empty() {
+            if let Ok(content) = std::fs::read_to_string(&self.cos_framework_path) {
+                if !content.trim().is_empty() {
+                    return content;
+                }
+            }
+            eprintln!(
+                "Warning: cos_framework_path '{}' unreadable, falling back to inline framework",
+                self.cos_framework_path
+            );
+        }
+        self.cos_framework.clone()
+    }
+
     pub fn save(&self) -> Result<(), String> {
         let path = data_dir().join("config.json");
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;

@@ -84,10 +84,23 @@ export default function Settings() {
           />
         </Section>
 
-        {/* Framework editor */}
+        {/* Framework */}
         <Section title="CoS Framework">
-          <p class="text-[10px] text-neutral-500 mb-2">
-            System prompt sent to Claude on session startup. Defines how CoS behaves.
+          <Field
+            label="Framework file path (optional)"
+            value={config()!.cos_framework_path}
+            onChange={(v) => update("cos_framework_path", v)}
+            help="Path to an external framework file (e.g. Obsidian vault). Takes priority over the inline editor below."
+          />
+          <Show when={config()!.cos_framework_path}>
+            <p class="text-[10px] text-cos-accent mt-1">
+              Using external file. Inline editor below is the fallback if the file is unreadable.
+            </p>
+          </Show>
+          <p class="text-[10px] text-neutral-500 mb-2 mt-3">
+            {config()!.cos_framework_path
+              ? "Fallback framework (used when external file is unreadable):"
+              : "System prompt sent to Claude on session startup:"}
           </p>
           <textarea
             value={config()!.cos_framework}

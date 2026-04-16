@@ -12,6 +12,7 @@ export default function Setup(props: { onComplete: () => void }) {
   const [sessionName, setSessionName] = createSignal("cos");
   const [httpPort, setHttpPort] = createSignal("7890");
   const [vaultPath, setVaultPath] = createSignal("");
+  const [frameworkPath, setFrameworkPath] = createSignal("");
   const [botToken, setBotToken] = createSignal("");
   const [chatId, setChatId] = createSignal("");
   const [saving, setSaving] = createSignal(false);
@@ -54,6 +55,7 @@ export default function Setup(props: { onComplete: () => void }) {
         vault_path: vaultPath(),
         cos_session: sessionName(),
         cos_cwd: cosDir(),
+        cos_framework_path: frameworkPath(),
         cos_framework: framework,
       };
       await saveConfig(config);
@@ -166,6 +168,13 @@ export default function Setup(props: { onComplete: () => void }) {
               value={vaultPath()}
               onChange={setVaultPath}
               help="Obsidian vault for the Dashboard page. Leave blank to skip."
+            />
+
+            <Field
+              label="Framework file (optional)"
+              value={frameworkPath()}
+              onChange={setFrameworkPath}
+              help="Path to a .md file with your CoS framework. Leave blank to use the built-in default."
             />
 
             <div class="border-t border-neutral-800 pt-3">

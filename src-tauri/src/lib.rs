@@ -79,8 +79,9 @@ fn ensure_cos_session(config: &state::BridgeConfig) {
     }
 
     // Write framework to file so Claude reads it on startup
+    // Prefers external file (cos_framework_path) if set and readable
     let framework_path = state::data_dir().join("cos-framework.md");
-    let framework_content = config.cos_framework.clone();
+    let framework_content = config.effective_framework();
 
     // On Windows/WSL, Claude runs inside WSL and can't reach Windows localhost.
     // Replace localhost with the host gateway IP so curl commands work.
