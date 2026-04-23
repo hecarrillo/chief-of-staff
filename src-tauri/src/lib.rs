@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod server;
+pub mod session_registry;
 pub mod state;
 pub mod telegram;
 pub mod tmux;
@@ -49,42 +50,13 @@ fn load_config() -> BridgeConfig {
     }
 }
 
-/// Kill any existing CoS session and start fresh
-fn ensure_cos_session(config: &state::BridgeConfig) {
-    let session_name = &config.cos_session;
-
-    // Always kill the old session — no reuse across app instances
-    if tmux::session_exists(session_name) {
-        let _ = tmux::kill_session(session_name);
-        // Brief pause so tmux fully cleans up
-        std::thread::sleep(std::time::Duration::from_millis(500));
-    }
-
-    let cwd = if config.cos_cwd.is_empty() {
-        dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .to_string_lossy()
-            .into_owned()
-    } else {
-        config.cos_cwd.clone()
-    };
-
-    // On Windows, convert the cwd to a WSL-accessible path
-    #[cfg(windows)]
-    let cwd = win_to_wsl_path(&cwd);
-
-    if let Err(e) = tmux::create_session(session_name, &cwd) {
-        eprintln!("Failed to create tmux session '{}': {}", session_name, e);
-        return;
-    }
-
-    // Write framework to file so Claude reads it on startup
-    // Prefers external file (cos_framework_path) if set and readable
+/// Resolve the framework file path, writing it out if needed, and return the
+/// shell-friendly argument (WSL-converted on Windows).
+fn prepare_framework_file(config: &state::BridgeConfig) -> String {
     let framework_path = state::data_dir().join("cos-framework.md");
-    let framework_content = config.effective_framework();
+    #[allow(unused_mut)]
+    let mut framework_content = config.effective_framework();
 
-    // On Windows/WSL, Claude runs inside WSL and can't reach Windows localhost.
-    // Replace localhost with the host gateway IP so curl commands work.
     #[cfg(windows)]
     {
         let port = config.http_port;
@@ -98,49 +70,128 @@ fn ensure_cos_session(config: &state::BridgeConfig) {
         eprintln!("Failed to write framework: {}", e);
     }
 
-    // On Windows, convert the framework path to a WSL-accessible path
-    let framework_arg = if cfg!(windows) {
+    if cfg!(windows) {
         let win_path = framework_path.to_string_lossy().replace('\\', "/");
-        // Convert C:/Users/... to /mnt/c/Users/...
         if let Some(rest) = win_path.strip_prefix("C:/") {
             format!("/mnt/c/{}", rest)
         } else if let Some(rest) = win_path.strip_prefix("c:/") {
             format!("/mnt/c/{}", rest)
         } else {
-            win_path.to_string()
+            win_path
         }
     } else {
         framework_path.to_string_lossy().into_owned()
+    }
+}
+
+/// Resolve cwd with WSL conversion on Windows
+fn resolve_cwd(config: &state::BridgeConfig) -> String {
+    let cwd = if config.cos_cwd.is_empty() {
+        dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        config.cos_cwd.clone()
     };
 
-    // Launch Claude Code with the framework appended to system prompt
-    // --append-system-prompt-file keeps CLAUDE.md discovery + adds our framework
-    let cmd = format!(
-        "claude --dangerously-skip-permissions --append-system-prompt-file {}",
-        framework_arg
-    );
-    let _ = tmux::send_keys(session_name, &cmd);
+    #[cfg(windows)]
+    let cwd = win_to_wsl_path(&cwd);
 
-    // Auto-accept the workspace trust dialog after a short delay
-    // Claude shows a trust prompt for new directories — send Enter to accept
-    std::thread::spawn({
-        let name = session_name.to_string();
-        move || {
-            for _ in 0..10 {
-                std::thread::sleep(std::time::Duration::from_secs(2));
-                if let Ok(content) = tmux::capture_pane(&name, 15) {
-                    if content.contains("Yes, I trust this folder") {
-                        let _ = tmux::send_keys(&name, "");
-                        break;
-                    }
-                    // Already past trust dialog
-                    if content.contains("Claude Code") && content.contains('>') {
-                        break;
-                    }
+    cwd
+}
+
+fn spawn_trust_accept(session: String) {
+    std::thread::spawn(move || {
+        for _ in 0..10 {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            if let Ok(content) = tmux::capture_pane(&session, 15) {
+                if content.contains("Yes, I trust this folder") {
+                    let _ = tmux::send_keys(&session, "");
+                    break;
+                }
+                if content.contains("Claude Code") && content.contains('>') {
+                    break;
                 }
             }
         }
     });
+}
+
+/// Ensure a tmux session for a specific dated SessionEntry.
+/// Returns the tmux session name. Does nothing if the tmux session already exists.
+/// - `is_new` indicates whether this entry was just created (fresh UUID) vs. loaded from registry.
+pub fn ensure_dated_session(
+    entry: &session_registry::SessionEntry,
+    config: &state::BridgeConfig,
+    is_new: bool,
+) -> String {
+    let tmux_name = entry.tmux_session.clone();
+
+    // Already alive — just return. App will target it.
+    if tmux::session_exists(&tmux_name) {
+        return tmux_name;
+    }
+
+    if let Err(e) = tmux::create_session(&tmux_name, &entry.cwd) {
+        eprintln!("Failed to create tmux session '{}': {}", tmux_name, e);
+        return tmux_name;
+    }
+
+    let framework_arg = prepare_framework_file(config);
+
+    // New session: create with deterministic UUID and display name.
+    // Existing session: resume by UUID so history comes back.
+    let claude_cmd = if is_new {
+        format!(
+            "claude --dangerously-skip-permissions --session-id {} --name {} --append-system-prompt-file {}",
+            entry.uuid, entry.name, framework_arg
+        )
+    } else {
+        format!(
+            "claude --dangerously-skip-permissions --resume {} --append-system-prompt-file {}",
+            entry.uuid, framework_arg
+        )
+    };
+    let _ = tmux::send_keys(&tmux_name, &claude_cmd);
+
+    spawn_trust_accept(tmux_name.clone());
+    tmux_name
+}
+
+/// Launch mode controlled by the frontend launch prompt.
+#[derive(Debug, Clone, Copy)]
+pub enum LaunchMode {
+    /// Create a fresh session (new UUID). Kills any prior tmux for today.
+    Renew,
+    /// Resume the existing registry entry for today. Creates registry if missing.
+    Continue,
+}
+
+/// Phase 2 init: executed after the UI resolves the launch prompt.
+/// Returns (tmux_session_name, was_resumed).
+pub fn init_today_session(config: &state::BridgeConfig, mode: LaunchMode) -> (String, bool) {
+    let today = session_registry::today_str();
+    let cwd = resolve_cwd(config);
+
+    let (entry, is_new) = match (session_registry::load(&today), mode) {
+        (Some(e), LaunchMode::Continue) => (e, false),
+        (_, LaunchMode::Renew) | (None, _) => {
+            // Kill any stale tmux for today, clear registry, create fresh
+            let tmux_name = session_registry::tmux_session_name(&config.cos_session, &today);
+            if tmux::session_exists(&tmux_name) {
+                let _ = tmux::kill_session(&tmux_name);
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            let _ = session_registry::delete(&today);
+            let e = session_registry::create_new(&config.cos_session, &today, &cwd);
+            let _ = session_registry::save(&e);
+            (e, true)
+        }
+    };
+
+    let tmux_name = ensure_dated_session(&entry, config, is_new);
+    (tmux_name, !is_new)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -153,10 +204,9 @@ pub fn run() {
     let _ = std::fs::create_dir_all(data.join("images"));
     let _ = std::fs::create_dir_all(data.join("todos"));
 
-    // Auto-init: create tmux CoS session if not running
-    ensure_cos_session(&config);
-
-    let app_state = AppState::new(config);
+    // Phase 1 only: build state with empty target. Frontend will call launch_session()
+    // after the user resolves the launch prompt, which creates/resumes the tmux session.
+    let app_state = AppState::new_full(config, String::new(), false);
     let todo_store = TodoStore::new();
 
     tauri::Builder::default()
@@ -184,11 +234,19 @@ pub fn run() {
             commands::save_config,
             commands::get_vault_files,
             commands::read_vault_file,
+            commands::read_daily_note,
+            commands::write_daily_note,
             commands::todo_list,
             commands::todo_add,
             commands::todo_toggle,
             commands::todo_remove,
             commands::answer_question,
+            commands::list_dated_sessions,
+            commands::current_session,
+            commands::resume_session,
+            commands::renew_today,
+            commands::get_launch_state,
+            commands::launch_session,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

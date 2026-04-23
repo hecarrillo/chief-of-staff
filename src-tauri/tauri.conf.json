@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "CoS Desktop",
+  "productName": "CoS_Desktop",
   "version": "0.1.0",
   "identifier": "com.realanalytica.cos-desktop",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "CoS Desktop",
+        "title": "CoS_Desktop",
         "width": 1000,
         "height": 700,
         "minWidth": 600,

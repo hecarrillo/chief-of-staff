@@ -15,10 +15,23 @@ export default function Sessions() {
 
   onMount(async () => {
     await refresh();
-    // Auto-refresh screen every 2s
-    refreshTimer = setInterval(() => {
-      if (autoRefresh() && activeTarget()) {
-        refreshScreen();
+    // Auto-refresh: screen content every 2s, session list every 4s
+    let tick = 0;
+    refreshTimer = setInterval(async () => {
+      if (!autoRefresh()) return;
+      if (activeTarget()) refreshScreen();
+      tick++;
+      if (tick % 2 === 0) {
+        // Refresh session list + windows for the active session
+        try {
+          const list = await getSessions();
+          setSessions(list);
+          const sess = activeSession();
+          if (sess) {
+            const wins = await getWindows(sess);
+            setActiveWindows(wins);
+          }
+        } catch {}
       }
     }, 2000);
   });

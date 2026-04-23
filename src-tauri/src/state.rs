@@ -122,18 +122,30 @@ pub struct AppState {
     pub last_from_telegram: RwLock<bool>,
     /// Currently targeted tmux window (e.g. "cos:0" or "cos:agents")
     pub target_window: RwLock<String>,
+    /// True if today's session was resumed (existing uuid) rather than freshly created.
+    /// Used to warn that framework changes won't apply until Renew.
+    pub session_was_resumed: RwLock<bool>,
 }
 
 impl AppState {
     pub fn new(config: BridgeConfig) -> Arc<Self> {
         let default_target = config.cos_session.clone();
+        Self::new_with_target(config, default_target)
+    }
+
+    pub fn new_with_target(config: BridgeConfig, target: String) -> Arc<Self> {
+        Self::new_full(config, target, false)
+    }
+
+    pub fn new_full(config: BridgeConfig, target: String, was_resumed: bool) -> Arc<Self> {
         let cached = Self::load_messages_from_disk();
         Arc::new(Self {
             mode: RwLock::new(Mode::AtDesk),
             messages: RwLock::new(cached),
             config: RwLock::new(config),
             last_from_telegram: RwLock::new(false),
-            target_window: RwLock::new(default_target),
+            target_window: RwLock::new(target),
+            session_was_resumed: RwLock::new(was_resumed),
         })
     }
 

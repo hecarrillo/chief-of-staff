@@ -1,3 +1,4 @@
+use crate::session_registry::{self, SessionEntry};
 use crate::state::{self, data_dir, AppState, Message, MessageSource, Mode};
 use crate::tmux;
 use crate::todos::TodoStore;
@@ -279,6 +280,67 @@ pub fn read_vault_file(path: String) -> Result<vault::VaultFile, String> {
     vault::read_file(&path)
 }
 
+// --- daily note (today's RAM) ---
+
+fn daily_path_for(vault_path: &str, date: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(vault_path).join("daily").join(format!("{}.md", date))
+}
+
+const DAILY_TEMPLATE: &str = "# {date}\n\n## Todos\n\n## Log\n\n## Open\n";
+
+#[tauri::command]
+pub async fn read_daily_note(
+    state: State<'_, SharedState>,
+    date: Option<String>,
+) -> Result<DailyNote, String> {
+    let vault = state.config.read().await.vault_path.clone();
+    if vault.is_empty() {
+        return Err("vault_path not configured".into());
+    }
+    let d = date.unwrap_or_else(|| session_registry::today_str());
+    let path = daily_path_for(&vault, &d);
+    let content = if path.exists() {
+        std::fs::read_to_string(&path).map_err(|e| e.to_string())?
+    } else {
+        let tpl = DAILY_TEMPLATE.replace("{date}", &d);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&path, &tpl).map_err(|e| e.to_string())?;
+        tpl
+    };
+    Ok(DailyNote {
+        date: d,
+        path: path.to_string_lossy().into_owned(),
+        content,
+    })
+}
+
+#[tauri::command]
+pub async fn write_daily_note(
+    state: State<'_, SharedState>,
+    date: Option<String>,
+    content: String,
+) -> Result<(), String> {
+    let vault = state.config.read().await.vault_path.clone();
+    if vault.is_empty() {
+        return Err("vault_path not configured".into());
+    }
+    let d = date.unwrap_or_else(|| session_registry::today_str());
+    let path = daily_path_for(&vault, &d);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DailyNote {
+    pub date: String,
+    pub path: String,
+    pub content: String,
+}
+
 // --- todos ---
 
 #[tauri::command]
@@ -317,6 +379,120 @@ pub async fn todo_remove(
     let removed = todos.remove(&id).await;
     let _ = tauri::Emitter::emit(&app, "todo-changed", &todos.list().await);
     Ok(removed)
+}
+
+// --- dated session registry ---
+
+#[tauri::command]
+pub fn list_dated_sessions() -> Vec<SessionEntry> {
+    session_registry::list_all()
+}
+
+#[tauri::command]
+pub async fn current_session(state: State<'_, SharedState>) -> Result<CurrentSession, String> {
+    let today = session_registry::today_str();
+    let entry = session_registry::load(&today);
+    let target = state.target_window.read().await.clone();
+    let was_resumed = *state.session_was_resumed.read().await;
+
+    Ok(CurrentSession { today, entry, target, was_resumed })
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CurrentSession {
+    pub today: String,
+    pub entry: Option<SessionEntry>,
+    pub target: String,
+    pub was_resumed: bool,
+}
+
+/// Launch state queried by the UI on app mount. Decides whether to show the launch prompt.
+#[tauri::command]
+pub async fn get_launch_state(state: State<'_, SharedState>) -> Result<LaunchState, String> {
+    let today = session_registry::today_str();
+    let entry = session_registry::load(&today);
+    let target = state.target_window.read().await.clone();
+    // needs_prompt: we have an existing entry AND the user hasn't launched yet (target empty).
+    let needs_prompt = entry.is_some() && target.is_empty();
+
+    // Framework staleness: framework mtime vs entry created_at.
+    let framework_stale = entry
+        .as_ref()
+        .map(|e| {
+            let fw = state::data_dir().join("cos-framework.md");
+            if let Ok(meta) = std::fs::metadata(&fw) {
+                if let Ok(modified) = meta.modified() {
+                    let fw_ts: chrono::DateTime<chrono::Utc> = modified.into();
+                    return fw_ts > e.created_at;
+                }
+            }
+            false
+        })
+        .unwrap_or(false);
+
+    Ok(LaunchState {
+        today,
+        entry,
+        needs_prompt,
+        framework_stale,
+        launched: !target.is_empty(),
+    })
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LaunchState {
+    pub today: String,
+    pub entry: Option<SessionEntry>,
+    pub needs_prompt: bool,
+    pub framework_stale: bool,
+    pub launched: bool,
+}
+
+/// Phase-2 init: create/resume tmux session for today based on chosen mode.
+#[tauri::command]
+pub async fn launch_session(
+    state: State<'_, SharedState>,
+    mode: String,
+) -> Result<String, String> {
+    let launch_mode = match mode.as_str() {
+        "renew" => crate::LaunchMode::Renew,
+        "continue" => crate::LaunchMode::Continue,
+        other => return Err(format!("Unknown launch mode: {}", other)),
+    };
+    let config = state.config.read().await.clone();
+    let (tmux_name, was_resumed) = crate::init_today_session(&config, launch_mode);
+    *state.target_window.write().await = tmux_name.clone();
+    *state.session_was_resumed.write().await = was_resumed;
+    Ok(tmux_name)
+}
+
+/// Bring up the tmux session for a given date (creating it + resuming Claude if needed)
+/// and switch the app's target_window to it.
+#[tauri::command]
+pub async fn resume_session(
+    state: State<'_, SharedState>,
+    date: String,
+) -> Result<String, String> {
+    let entry = session_registry::load(&date)
+        .ok_or_else(|| format!("No session found for {}", date))?;
+    let config = state.config.read().await.clone();
+
+    // If today's date and the entry doesn't exist yet, create_new logic handled elsewhere.
+    // Here we always treat as resume (is_new=false).
+    let tmux_name = crate::ensure_dated_session(&entry, &config, false);
+    *state.target_window.write().await = tmux_name.clone();
+    Ok(tmux_name)
+}
+
+/// Kill today's tmux session, delete the registry entry, and init a fresh session for today.
+#[tauri::command]
+pub async fn renew_today(state: State<'_, SharedState>) -> Result<SessionEntry, String> {
+    let config = state.config.read().await.clone();
+    let (tmux_name, _) = crate::init_today_session(&config, crate::LaunchMode::Renew);
+    *state.target_window.write().await = tmux_name;
+    *state.session_was_resumed.write().await = false;
+    let today = session_registry::today_str();
+    session_registry::load(&today).ok_or_else(|| "Failed to load fresh entry".to_string())
 }
 
 #[tauri::command]

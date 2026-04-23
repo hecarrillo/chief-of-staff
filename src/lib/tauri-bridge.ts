@@ -90,3 +90,40 @@ export async function getVaultFiles(category: string): Promise<VaultFile[]> {
 export async function readVaultFile(path: string): Promise<VaultFile> {
   return invoke("read_vault_file", { path });
 }
+
+export interface SessionEntry {
+  date: string;
+  uuid: string;
+  name: string;
+  tmux_session: string;
+  cwd: string;
+  created_at: string;
+}
+
+export interface CurrentSession {
+  today: string;
+  entry: SessionEntry | null;
+  target: string;
+  was_resumed: boolean;
+  framework_stale: boolean;
+}
+
+export async function listDatedSessions(): Promise<SessionEntry[]> {
+  return invoke("list_dated_sessions");
+}
+
+export async function currentSession(): Promise<CurrentSession> {
+  return invoke("current_session");
+}
+
+export async function resumeSession(date: string): Promise<string> {
+  return invoke("resume_session", { date });
+}
+
+export async function renewToday(): Promise<SessionEntry> {
+  return invoke("renew_today");
+}
+
+export async function acknowledgeResume(): Promise<void> {
+  return invoke("acknowledge_resume");
+}

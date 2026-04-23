@@ -2,7 +2,8 @@ import { Router, Route, useLocation } from "@solidjs/router";
 import { createSignal, Show } from "solid-js";
 import Sidebar from "./components/Sidebar";
 import StatusBar from "./components/StatusBar";
-import TodoPanel from "./components/TodoPanel";
+import TodayPanel from "./components/TodayPanel";
+import SessionLaunchPrompt from "./components/SessionLaunchPrompt";
 import Messages from "./pages/Messages";
 import Dashboard from "./pages/Dashboard";
 import Sessions from "./pages/Sessions";
@@ -20,9 +21,7 @@ function Layout(props: { children?: any }) {
         <Sidebar />
         <main class="flex-1 overflow-hidden">{props.children}</main>
         <Show when={showTodo()}>
-          <div class="w-56">
-            <TodoPanel />
-          </div>
+          <TodayPanel />
         </Show>
       </div>
       <StatusBar />
@@ -33,6 +32,7 @@ function Layout(props: { children?: any }) {
 export default function App() {
   const [setupDone, setSetupDone] = createSignal(false);
   const [checking, setChecking] = createSignal(true);
+  const [sessionReady, setSessionReady] = createSignal(false);
 
   // Quick check if config exists
   import("@tauri-apps/api/core").then(({ invoke }) => {
@@ -50,13 +50,18 @@ export default function App() {
         when={setupDone()}
         fallback={<Setup onComplete={() => setSetupDone(true)} />}
       >
-        {startPolling()}
-        <Router root={Layout}>
-          <Route path="/" component={Messages} />
-          <Route path="/dashboard" component={Dashboard} />
-          <Route path="/sessions" component={Sessions} />
-          <Route path="/settings" component={Settings} />
-        </Router>
+        {/* Launch prompt blocks the UI until user chooses continue/renew.
+            onReady fires once the tmux session is up, then we boot the rest. */}
+        <SessionLaunchPrompt onReady={() => setSessionReady(true)} />
+        <Show when={sessionReady()}>
+          {startPolling()}
+          <Router root={Layout}>
+            <Route path="/" component={Messages} />
+            <Route path="/dashboard" component={Dashboard} />
+            <Route path="/sessions" component={Sessions} />
+            <Route path="/settings" component={Settings} />
+          </Router>
+        </Show>
       </Show>
     </Show>
   );

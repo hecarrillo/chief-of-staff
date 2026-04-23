@@ -122,9 +122,13 @@ pub fn create_window(session: &str, window: &str, cwd: &str) -> Result<(), Strin
     Ok(())
 }
 
-/// Send text to a session:window target, then press Enter
+/// Send text to a session:window target, then press Enter.
+/// Split into two tmux calls because Claude Code's paste bracketing
+/// treats text+Enter in a single call as one paste event (Enter stays literal).
 pub fn send_keys(target: &str, text: &str) -> Result<(), String> {
-    tmux(&["send-keys", "-t", target, text, "Enter"])?;
+    tmux(&["send-keys", "-t", target, text])?;
+    std::thread::sleep(std::time::Duration::from_millis(120));
+    tmux(&["send-keys", "-t", target, "Enter"])?;
     Ok(())
 }
 

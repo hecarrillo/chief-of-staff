@@ -1,7 +1,7 @@
 [package]
 name = "cos-desktop"
 version = "0.1.0"
-description = "CoS Desktop — batteries-included AI chief of staff"
+description = "CoS_Desktop — batteries-included AI chief of staff"
 authors = ["Hector Carrillo"]
 edition = "2021"
 

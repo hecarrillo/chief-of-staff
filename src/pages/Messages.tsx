@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import MessageBubble from "../components/MessageBubble";
 import QuestionCard from "../components/QuestionCard";
+import SessionPicker from "../components/SessionPicker";
 import type { QuestionPayload } from "../components/QuestionCard";
 import type { Message } from "../lib/types";
 
@@ -85,16 +86,31 @@ export default function Messages() {
     setSessionReady(true);
   }
 
-  // Auto-scroll when messages change (from global poller)
+  // Autoscroll only when length grows AND the user was already near the bottom.
+  // Prevents the 2s poller from yanking the view back to bottom while scrolling history.
+  let scrollContainer: HTMLDivElement | undefined;
+  let prevLen = 0;
+  let stickToBottom = true;
+
   createEffect(() => {
-    const _len = messages().length;
-    scrollToBottom();
+    const len = messages().length;
+    if (len > prevLen && stickToBottom) {
+      scrollToBottom();
+    }
+    prevLen = len;
   });
+
+  function handleScrollContainer(e: Event) {
+    const el = e.currentTarget as HTMLDivElement;
+    // Within 80px of bottom = "at bottom" → resume sticky behavior
+    stickToBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }
 
   onMount(async () => {
     try {
       const history = await getMessages();
       setMessages(history);
+      prevLen = history.length;
     } catch (e) {
       console.error("Failed to load history:", e);
     }
@@ -104,12 +120,12 @@ export default function Messages() {
 
     const unlisten = await onNewMessage((msg) => {
       addMessage(msg);
-      scrollToBottom();
+      if (stickToBottom) scrollToBottom();
     });
 
     const unlistenQ = await listen<QuestionPayload>("cos-question", (event) => {
       setQuestions((prev) => [...prev, event.payload]);
-      scrollToBottom();
+      if (stickToBottom) scrollToBottom();
     });
 
     onCleanup(() => { unlisten(); unlistenQ(); });
@@ -215,20 +231,12 @@ export default function Messages() {
 
   return (
     <div class="flex flex-col h-full">
-      {/* Session + Window selector */}
-      <div class="flex items-center gap-2 px-4 py-2 border-b border-neutral-800 bg-neutral-950/50">
-        <span class="text-[10px] text-neutral-500 uppercase tracking-wider">Target</span>
-        <select
-          class="bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-200 focus:outline-none focus:border-cos-accent"
-          value={activeSession()}
-          onChange={(e) => handleSessionChange(e.currentTarget.value)}
-        >
-          <For each={sessions()}>
-            {(s) => <option value={s.name}>{s.name}</option>}
-          </For>
-        </select>
-        <Show when={windows().length > 1}>
-          <span class="text-neutral-700">:</span>
+      {/* Session picker + window target */}
+      <div class="flex items-center gap-3 px-4 py-2 border-b border-neutral-800 bg-neutral-950/50">
+        <SessionPicker onChanged={() => { loadSessions(); pollSessionReady(); }} />
+        <div class="w-px h-4 bg-neutral-800" />
+        <span class="text-[10px] text-neutral-500 uppercase tracking-wider">Window</span>
+        <Show when={windows().length > 1} fallback={<span class="text-[10px] text-neutral-600">(single)</span>}>
           <select
             class="bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-200 focus:outline-none focus:border-cos-accent"
             value={activeTarget().split(":")[1] || ""}
@@ -242,14 +250,18 @@ export default function Messages() {
         <button
           onClick={loadSessions}
           class="text-[10px] text-neutral-500 hover:text-neutral-300 transition-colors px-1"
-          title="Refresh sessions"
+          title="Refresh"
         >
           ↻
         </button>
-        <span class="text-[10px] text-neutral-600 ml-auto">{activeTarget()}</span>
+        <span class="text-[10px] text-neutral-600 ml-auto font-mono">{activeTarget()}</span>
       </div>
 
-      <div class="flex-1 overflow-y-auto p-4 space-y-3 relative">
+      <div
+        ref={scrollContainer}
+        onScroll={handleScrollContainer}
+        class="flex-1 overflow-y-auto p-4 space-y-3 relative"
+      >
         <Show when={!sessionReady()}>
           <div class="absolute inset-0 flex flex-col items-center justify-center bg-neutral-950/80 z-10">
             <div class="flex items-center gap-3 mb-3">
